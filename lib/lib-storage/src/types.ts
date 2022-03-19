@@ -59,4 +59,9 @@ export interface Options extends Partial<Configuration> {
    * This the target where we upload data.
    */
   client: S3Client;
+
+  /**
+   * Upload ID for existing upload
+   */
+  uploadId?: string;
 }

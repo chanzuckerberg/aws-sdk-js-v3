@@ -4,7 +4,6 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   CreateMultipartUploadCommandOutput,
-  ListMultipartUploadsCommand,
   ListPartsCommand,
   Part,
   PutObjectCommand,
@@ -67,6 +66,7 @@ export class Upload extends EventEmitter {
   private uploadedParts: CompletedPart[] = [];
   private uploadId?: string;
   uploadEvent?: string;
+  createdMultipartUploadEvent = "createdMultipartUpload";
 
   private isMultiPart = true;
   private putResponse?: PutObjectCommandOutput;
@@ -91,6 +91,10 @@ export class Upload extends EventEmitter {
     this.totalBytes = byteLength(this.params.Body);
     this.bytesUploadedSoFar = 0;
     this.abortController = new AbortController();
+
+    if (options.uploadId) {
+      this.uploadId = options.uploadId;
+    }
   }
 
   async abort(): Promise<void> {
@@ -110,19 +114,8 @@ export class Upload extends EventEmitter {
     super.on(event, listener);
   }
 
-  async __checkForExistingMultipartUpload() {
-    const { Bucket, Key: Prefix } = this.params;
-    const listUploadsCommandParams = {
-      Bucket,
-      Prefix,
-      MaxUploads: 1,
-    };
-
-    const { Uploads } = await this.client.send(new ListMultipartUploadsCommand(listUploadsCommandParams));
-
-    if (Uploads && Uploads.length > 0) {
-      this.uploadId = Uploads[0].UploadId;
-    }
+  onCreatedMultipartUpload(listener: (uploadId: string) => void): any {
+    super.on(this.createdMultipartUploadEvent, listener);
   }
 
   async __getUploadedParts() {
@@ -191,6 +184,10 @@ export class Upload extends EventEmitter {
     }
     const createMultipartUploadResult = await this.createMultiPartPromise;
     this.uploadId = createMultipartUploadResult.UploadId;
+
+    if (this.createdMultipartUploadEvent) {
+      this.emit(this.createdMultipartUploadEvent, this.uploadId);
+    }
   }
 
   async __doConcurrentUpload(dataFeeder: AsyncGenerator<RawDataPart, void, undefined>): Promise<void> {
@@ -280,12 +277,16 @@ export class Upload extends EventEmitter {
     // Set up data input chunks.
     const dataFeeder = getChunk(this.params.Body, this.partSize);
 
-    // Set uploadId if multipart upload exists
-    await this.__checkForExistingMultipartUpload();
-
     // Retrieve and store metadata for previously uploaded parts
     if (this.uploadId) {
-      await this.__getUploadedParts();
+      try {
+        await this.__getUploadedParts();
+      } catch (e) {
+        // if we can't get the parts, assume that this upload ID in invalid
+        // and recreate the upload
+        this.uploadId = null;
+        this.emit(this.createdMultipartUploadEvent, null);
+      }
     }
 
     // Create and start concurrent uploads.

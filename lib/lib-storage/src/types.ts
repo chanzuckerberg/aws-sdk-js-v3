@@ -50,4 +50,9 @@ export interface Options extends Partial<Configuration> {
    * This the target where we upload data.
    */
   client: ServiceClients;
+
+  /**
+   * Upload ID for existing upload
+   */
+  uploadId?: string;
 }

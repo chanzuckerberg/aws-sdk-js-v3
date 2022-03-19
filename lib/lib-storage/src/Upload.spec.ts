@@ -42,6 +42,15 @@ const requestHandlerMock = (() => {
   return mock;
 })();
 
+const listPartsMock = jest.fn().mockResolvedValue({
+  Parts: [
+    {
+      PartNumber: 1,
+      ETag: "mock-part-ETag",
+    },
+  ],
+});
+
 jest.mock("@aws-sdk/client-s3", () => ({
   ...(jest.requireActual("@aws-sdk/client-s3") as {}),
   S3: jest.fn().mockReturnValue({
@@ -62,6 +71,7 @@ jest.mock("@aws-sdk/client-s3", () => ({
   CompleteMultipartUploadCommand: completeMultipartMock,
   PutObjectTaggingCommand: putObjectTaggingMock,
   PutObjectCommand: putObjectMock,
+  ListPartsCommand: listPartsMock,
 }));
 
 import { CompleteMultipartUploadCommandOutput, S3, S3Client } from "@aws-sdk/client-s3";
@@ -133,6 +143,8 @@ describe(Upload.name, () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
 
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
+
     expect(putObjectMock).toHaveBeenCalledTimes(1);
     expect(putObjectMock).toHaveBeenCalledWith({
       ...params,
@@ -161,6 +173,8 @@ describe(Upload.name, () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
 
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
+
     expect(putObjectMock).toHaveBeenCalledTimes(1);
     expect(putObjectMock).toHaveBeenCalledWith({
       ...params,
@@ -185,6 +199,8 @@ describe(Upload.name, () => {
     await upload.done();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
 
     expect(putObjectMock).toHaveBeenCalledTimes(1);
     expect(putObjectMock).toHaveBeenCalledWith({
@@ -215,6 +231,8 @@ describe(Upload.name, () => {
     await upload.done();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
 
     expect(putObjectMock).toHaveBeenCalledTimes(1);
     expect(putObjectMock).toHaveBeenCalledWith({
@@ -272,6 +290,9 @@ describe(Upload.name, () => {
     });
     await upload.done();
     expect(sendMock).toHaveBeenCalledTimes(4);
+
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
+
     // create multipartMock is called correctly.
     expect(createMultipartMock).toHaveBeenCalledTimes(1);
     expect(createMultipartMock).toHaveBeenCalledWith({
@@ -339,6 +360,9 @@ describe(Upload.name, () => {
     await upload.done();
 
     expect(sendMock).toHaveBeenCalledTimes(4);
+
+    expect(listPartsMock).toHaveBeenCalledTimes(0);
+
     // create multipartMock is called correctly.
     expect(createMultipartMock).toHaveBeenCalledTimes(1);
     expect(createMultipartMock).toHaveBeenCalledWith({
@@ -656,5 +680,62 @@ describe(Upload.name, () => {
     } catch (error) {
       expect(error).toBeDefined();
     }
+  });
+
+  it("should call list parts command and skip uploading part when there is an existing uploadID is provided", async () => {
+    const largeBuffer = Buffer.from("#".repeat(DEFAULT_PART_SIZE + 10));
+    const secondBuffer = largeBuffer.subarray(DEFAULT_PART_SIZE);
+    const streamBody = Readable.from(
+      (function* () {
+        yield largeBuffer;
+      })()
+    );
+    const actionParams = { ...params, Body: streamBody };
+    const upload = new Upload({
+      params: actionParams,
+      client: new S3({}),
+      uploadId: "mockExistingUploadId",
+    });
+    await upload.done();
+    expect(sendMock).toHaveBeenCalledTimes(3);
+
+    expect(listPartsMock).toHaveBeenCalledTimes(1);
+
+    // multipart upload already exists
+    expect(createMultipartMock).toHaveBeenCalledTimes(0);
+
+    expect(uploadPartMock).toHaveBeenCalledTimes(1);
+    expect(uploadPartMock).toHaveBeenCalledWith({
+      ...actionParams,
+      Body: secondBuffer,
+      PartNumber: 2,
+      UploadId: "mockExistingUploadId",
+    });
+
+    // complete multipart upload is called correctly.
+    expect(completeMultipartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("should provide uploadId when multipart upload is created", async () => {
+    const partSize = 1024 * 1024 * 5;
+    const largeBuffer = Buffer.from("#".repeat(partSize + 10));
+    const streamBody = Readable.from(
+      (function* () {
+        yield largeBuffer;
+      })()
+    );
+    const actionParams = { ...params, Body: streamBody };
+    const upload = new Upload({
+      params: actionParams,
+      client: new S3({}),
+    });
+
+    let uploadId: string = "";
+    upload.onCreatedMultipartUpload((returnedUploadId) => {
+      uploadId = returnedUploadId;
+    });
+
+    await upload.done();
+    expect(uploadId).toBe("mockuploadId");
   });
 });

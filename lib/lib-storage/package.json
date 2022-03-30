@@ -36,9 +36,11 @@
     "@aws-sdk/client-s3": "^3.0.0"
   },
   "devDependencies": {
+    "@aws-crypto/sha256-browser": "2.0.0",
     "@aws-sdk/abort-controller": "*",
     "@aws-sdk/client-s3": "*",
     "@aws-sdk/types": "*",
+    "@aws-sdk/util-base64-browser": "*",
     "@tsconfig/recommended": "1.0.1",
     "@types/node": "^14.11.2",
     "concurrently": "7.0.0",

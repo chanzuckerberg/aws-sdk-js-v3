@@ -1,3 +1,4 @@
+import { Sha256 } from "@aws-crypto/sha256-browser";
 import { AbortController, AbortSignal } from "@aws-sdk/abort-controller";
 import {
   AbortMultipartUploadCommandOutput,
@@ -23,6 +24,7 @@ import {
 import { HttpRequest } from "@aws-sdk/protocol-http";
 import { extendedEncodeURIComponent } from "@aws-sdk/smithy-client";
 import { Endpoint } from "@aws-sdk/types";
+import { toBase64 } from "@aws-sdk/util-base64-browser";
 import { EventEmitter } from "events";
 
 import { byteLength } from "./bytelength";
@@ -38,9 +40,6 @@ export interface RawDataPart {
 interface UploadedPartAttributes {
   PartNumber: number;
   ETag: string;
-  ChecksumCRC32?: string;
-  ChecksumCRC32C?: string;
-  ChecksumSHA1?: string;
   ChecksumSHA256?: string;
 }
 
@@ -73,7 +72,7 @@ export class Upload extends EventEmitter {
   private createMultiPartPromise?: Promise<CreateMultipartUploadCommandOutput>;
 
   private uploadedParts: CompletedPart[] = [];
-  private uploadId?: string;
+  private uploadId?: string | null;
   uploadEvent?: string;
   createdMultipartUploadEvent = "createdMultipartUpload";
 
@@ -160,9 +159,6 @@ export class Upload extends EventEmitter {
             this.previouslyUploadedPartsMap[PartNumber] = {
               PartNumber,
               ETag,
-              ...(part.ChecksumCRC32 && { ChecksumCRC32: part.ChecksumCRC32 }),
-              ...(part.ChecksumCRC32C && { ChecksumCRC32C: part.ChecksumCRC32C }),
-              ...(part.ChecksumSHA1 && { ChecksumSHA1: part.ChecksumSHA1 }),
               ...(part.ChecksumSHA256 && { ChecksumSHA256: part.ChecksumSHA256 }),
             };
           }
@@ -255,6 +251,18 @@ export class Upload extends EventEmitter {
     }
   }
 
+  async __uploadedPartChecksumValid(dataPart: RawDataPart, sha256Checksum: string): Promise<boolean> {
+    const fileData = dataPart.data;
+    if (!(fileData instanceof Uint8Array)) {
+      return false;
+    }
+
+    const hash = new Sha256();
+    hash.update(fileData);
+    const localSha256Checksum = toBase64(await hash.digest());
+    return localSha256Checksum === sha256Checksum;
+  }
+
   private async __doConcurrentUpload(dataFeeder: AsyncGenerator<RawDataPart, void, undefined>): Promise<void> {
     for await (const dataPart of dataFeeder) {
       if (this.uploadedParts.length > this.MAX_PARTS) {
@@ -315,21 +323,24 @@ export class Upload extends EventEmitter {
 
         // If this part was uploaded, use the stored metadata
         const previouslyUploadedPart = this.previouslyUploadedPartsMap[dataPart.partNumber];
-        if (previouslyUploadedPart) {
-          // TODO: integrity check on dataPart.data
+        const previouslyUploadedPartValid =
+          previouslyUploadedPart && previouslyUploadedPart.ChecksumSHA256
+            ? await this.__uploadedPartChecksumValid(dataPart, previouslyUploadedPart.ChecksumSHA256)
+            : false;
+
+        // If previously uploaded part is valid, skip uploading again.
+        // Store uploaded part for complete multipart upload request
+        if (previouslyUploadedPartValid) {
           this.uploadedParts.push({
             PartNumber: previouslyUploadedPart.PartNumber,
             ETag: previouslyUploadedPart.ETag,
-            ...(previouslyUploadedPart.ChecksumCRC32 && { ChecksumCRC32: previouslyUploadedPart.ChecksumCRC32 }),
-            ...(previouslyUploadedPart.ChecksumCRC32C && { ChecksumCRC32C: previouslyUploadedPart.ChecksumCRC32C }),
-            ...(previouslyUploadedPart.ChecksumSHA1 && { ChecksumSHA1: previouslyUploadedPart.ChecksumSHA1 }),
             ...(previouslyUploadedPart.ChecksumSHA256 && { ChecksumSHA256: previouslyUploadedPart.ChecksumSHA256 }),
           });
         } else {
           const partResult = await this.client.send(
             new UploadPartCommand({
               ...this.params,
-              UploadId: this.uploadId,
+              UploadId: <string>this.uploadId,
               Body: dataPart.data,
               PartNumber: dataPart.partNumber,
             })
@@ -352,9 +363,6 @@ export class Upload extends EventEmitter {
           this.uploadedParts.push({
             PartNumber: dataPart.partNumber,
             ETag: partResult.ETag,
-            ...(partResult.ChecksumCRC32 && { ChecksumCRC32: partResult.ChecksumCRC32 }),
-            ...(partResult.ChecksumCRC32C && { ChecksumCRC32C: partResult.ChecksumCRC32C }),
-            ...(partResult.ChecksumSHA1 && { ChecksumSHA1: partResult.ChecksumSHA1 }),
             ...(partResult.ChecksumSHA256 && { ChecksumSHA256: partResult.ChecksumSHA256 }),
           });
         }
@@ -419,7 +427,7 @@ export class Upload extends EventEmitter {
       const uploadCompleteParams = {
         ...this.params,
         Body: undefined,
-        UploadId: this.uploadId,
+        UploadId: <string>this.uploadId,
         MultipartUpload: {
           Parts: this.uploadedParts,
         },

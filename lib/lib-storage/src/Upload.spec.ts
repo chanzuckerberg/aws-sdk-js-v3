@@ -47,6 +47,8 @@ const listPartsMock = jest.fn().mockResolvedValue({
     {
       PartNumber: 1,
       ETag: "mock-part-ETag",
+      // this was obtained by adding a console.log when calculating in actual code
+      ChecksumSHA256: "eu1MyFbmILcxZCObrKejv2ZFvYB9jcO8XX370ONoEHU=",
     },
   ],
 });
@@ -682,7 +684,7 @@ describe(Upload.name, () => {
     }
   });
 
-  it("should call list parts command and skip uploading part when there is an existing uploadID is provided", async () => {
+  it("should call list parts command and skip uploading part when an uploadID is provided", async () => {
     const largeBuffer = Buffer.from("#".repeat(DEFAULT_PART_SIZE + 10));
     const secondBuffer = largeBuffer.subarray(DEFAULT_PART_SIZE);
     const streamBody = Readable.from(
@@ -719,6 +721,7 @@ describe(Upload.name, () => {
   it("should provide uploadId when multipart upload is created", async () => {
     const partSize = 1024 * 1024 * 5;
     const largeBuffer = Buffer.from("#".repeat(partSize + 10));
+
     const streamBody = Readable.from(
       (function* () {
         yield largeBuffer;
